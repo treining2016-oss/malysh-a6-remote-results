@@ -1,4 +1,4 @@
-name: A6 Status Relay V1
+name: A6 Status Relay V2
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: a6-status-relay-v1
+  group: a6-status-relay-v2
   cancel-in-progress: false
 
 jobs:
@@ -126,22 +126,25 @@ jobs:
           PY
           openssl pkeyutl -verify -pubin -inkey relay/server152-receipt-public.pem -rawin -in /tmp/a6-receipt-unsigned.json -sigfile /tmp/a6-receipt.sig
           echo 'A6_STATUS_RECEIPT_SIGNATURE=GREEN'
-      - name: Publish immutable-by-task-id public receipt
+      - name: Publish create-once result branch
         shell: bash
         run: |
           set -Eeuo pipefail
           TASK_ID="$(cat /tmp/a6-task-id)"
-          DEST="receipts/${TASK_ID}.json"
-          mkdir -p receipts
-          if test -e "$DEST"; then
-            cmp -s "$DEST" /tmp/a6-public-receipt.json || { echo 'A6_PUBLIC_RECEIPT_CONFLICT=RED'; exit 77; }
+          BRANCH="A6_RESULT/${TASK_ID}"
+          git config user.name 'a6-remote-relay[bot]'
+          git config user.email 'a6-remote-relay[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin "refs/heads/${BRANCH}" >/dev/null 2>&1; then
+            git fetch --no-tags --depth=1 origin "refs/heads/${BRANCH}:refs/remotes/origin/a6-result-existing"
+            git show refs/remotes/origin/a6-result-existing:receipt.json > /tmp/a6-existing-receipt.json
+            cmp -s /tmp/a6-existing-receipt.json /tmp/a6-public-receipt.json || { echo 'A6_PUBLIC_RECEIPT_CONFLICT=RED'; exit 77; }
             echo 'A6_PUBLIC_RECEIPT=IDEMPOTENT'
             exit 0
           fi
-          cp /tmp/a6-public-receipt.json "$DEST"
-          git config user.name 'a6-remote-relay[bot]'
-          git config user.email 'a6-remote-relay[bot]@users.noreply.github.com'
-          git add "$DEST"
+          git checkout -b "$BRANCH" "$GITHUB_SHA"
+          cp /tmp/a6-public-receipt.json receipt.json
+          git add receipt.json
           git commit -m "A6_RESULT ${TASK_ID}"
-          git push origin HEAD:main
+          git push origin "HEAD:refs/heads/${BRANCH}"
+          echo "A6_PUBLIC_RECEIPT_BRANCH=${BRANCH}"
           echo 'A6_PUBLIC_RECEIPT=PUBLISHED'
