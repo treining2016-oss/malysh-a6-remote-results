@@ -1,0 +1,57 @@
+{
+  "schema": "a6.github_owner_boundary.receipt.v1",
+  "generated_at_utc": "2026-08-31T10:28:33Z",
+  "status": "GREEN",
+  "account_tier": "GITHUB_FREE",
+  "paid_plan_used": false,
+  "command_domain": {
+    "repository_identity_sha256": "e59022475b09f49db45f52ae134f6a48fc33a438d5815bec199d5601864c615a",
+    "visibility": "private",
+    "fetch_installation_repository_count": 1,
+    "fetch_installation_http": 200,
+    "fetch_read_http": 200,
+    "fetch_write_http": 403,
+    "publisher_visibility_http": 404
+  },
+  "receipt_domain": {
+    "repository_identity_sha256": "300b2ab95880c74c842649bbc6a088e644f58ba1c7b8e7e453811ae6452e34b8",
+    "visibility": "public_receipt_only",
+    "publisher_installation_repository_count": 1,
+    "publisher_installation_http": 200,
+    "genesis_sha": "b8751f88e41dcab44daa570379dd6c09626b56d4",
+    "proof_ref": "refs/heads/A6_RESULT/owner-boundary-proof-v1",
+    "proof_ref_create": "already-exists",
+    "non_result_ref_create_http": 422,
+    "proof_commit_object_http": 201,
+    "proof_ref_update_http": 422,
+    "proof_ref_delete_http": 422,
+    "proof_ref_final_http": 200,
+    "proof_ref_final_sha": "b8751f88e41dcab44daa570379dd6c09626b56d4"
+  },
+  "rulesets": [
+    {
+      "name": "A6_LOCK_NON_RESULT_REFS",
+      "id": 21886193,
+      "state": "active",
+      "observed_effect": "non-result creation denied"
+    },
+    {
+      "name": "A6_RESULT_IMMUTABLE_AFTER_CREATE",
+      "id": 21886223,
+      "state": "active",
+      "observed_effect": "result update and deletion denied"
+    }
+  ],
+  "assertions": {
+    "fetch_is_read_only": true,
+    "publisher_cannot_see_command_domain": true,
+    "publisher_cannot_create_non_result_ref": true,
+    "result_ref_is_immutable_after_creation": true,
+    "secrets_in_receipt": false
+  },
+  "excluded_scope": [
+    "server152_credential_provisioning",
+    "production_change",
+    "G4"
+  ]
+}
