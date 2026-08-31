@@ -1,0 +1,56 @@
+name: A6 Result Immutability Probe V1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/a6-result-immutability-probe.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Prove created A6_RESULT ref rejects update and deletion
+        shell: bash
+        env:
+          TARGET: A6_RESULT/status-live-20260831-0207z
+          EXPECT_SHA: 19ba5715aa8d394d64a0e7f6539e1652f675134e
+          EXPECT_RECEIPT_BLOB: 4d3beec81128505e8bd6a03934031cf8f6047712
+        run: |
+          set -Eeuo pipefail
+          BEFORE="$(git ls-remote --heads origin "refs/heads/${TARGET}" | awk '{print $1}')"
+          test "$BEFORE" = "$EXPECT_SHA"
+          git fetch --no-tags --depth=1 origin "refs/heads/${TARGET}:refs/remotes/origin/immutability-target"
+          test "$(git rev-parse refs/remotes/origin/immutability-target:receipt.json)" = "$EXPECT_RECEIPT_BLOB"
+          git checkout -B immutability-probe refs/remotes/origin/immutability-target
+          printf '%s\n' '{"probe":"MUST_NOT_LAND"}' > receipt.json
+          git config user.name 'a6-immutability-probe[bot]'
+          git config user.email 'a6-immutability-probe[bot]@users.noreply.github.com'
+          git add receipt.json
+          git commit -m 'NEGATIVE TEST: must not update A6_RESULT'
+          set +e
+          git push --force origin "HEAD:refs/heads/${TARGET}" >/tmp/a6-update-probe.log 2>&1
+          UPDATE_RC=$?
+          git push origin ":refs/heads/${TARGET}" >/tmp/a6-delete-probe.log 2>&1
+          DELETE_RC=$?
+          set -e
+          echo "A6_RESULT_UPDATE_RC=$UPDATE_RC"
+          echo "A6_RESULT_DELETE_RC=$DELETE_RC"
+          test "$UPDATE_RC" -ne 0
+          test "$DELETE_RC" -ne 0
+          grep -Eq 'GH013|protected|rule violations|Cannot update' /tmp/a6-update-probe.log
+          grep -Eq 'GH013|protected|rule violations|deletion|Cannot delete|Cannot update' /tmp/a6-delete-probe.log
+          AFTER="$(git ls-remote --heads origin "refs/heads/${TARGET}" | awk '{print $1}')"
+          test "$AFTER" = "$EXPECT_SHA"
+          git fetch --no-tags --depth=1 origin "refs/heads/${TARGET}:refs/remotes/origin/immutability-after" --force
+          test "$(git rev-parse refs/remotes/origin/immutability-after:receipt.json)" = "$EXPECT_RECEIPT_BLOB"
+          echo 'A6_RESULT_UPDATE_DENY=GREEN'
+          echo 'A6_RESULT_DELETE_DENY=GREEN'
+          echo 'A6_RESULT_REF_UNCHANGED=GREEN'
