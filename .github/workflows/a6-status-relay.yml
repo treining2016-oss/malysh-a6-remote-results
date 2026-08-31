@@ -1,0 +1,147 @@
+name: A6 Status Relay V1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'relay/request.json'
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: a6-status-relay-v1
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    if: github.actor == 'treining2016-oss'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Build exact bounded A6_STATUS task
+        shell: bash
+        env:
+          RELAY_SHA: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import datetime as dt,json,os,re
+          from pathlib import Path
+          req=json.loads(Path('relay/request.json').read_text(encoding='utf-8'))
+          if set(req)!={'schema','task_id','operation','nonce','params'}: raise SystemExit('request exact fields')
+          if req['schema']!='A6_REMOTE_OIDC_REQUEST_V1': raise SystemExit('request schema')
+          if not isinstance(req['task_id'],str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{5,63}',req['task_id']): raise SystemExit('task id')
+          if req['operation']!='A6_STATUS': raise SystemExit('operation')
+          if not isinstance(req['nonce'],str) or not re.fullmatch(r'[0-9a-f]{32}',req['nonce']): raise SystemExit('nonce')
+          if req['params']!={}: raise SystemExit('params')
+          sha=os.environ['RELAY_SHA']
+          if not re.fullmatch(r'[0-9a-f]{40}',sha): raise SystemExit('relay sha')
+          now=dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+          task={
+            'schema':'A6_REMOTE_OIDC_TASK_V1',
+            'task_id':req['task_id'],
+            'operation':'A6_STATUS',
+            'relay_sha':sha,
+            'issued_at':now.isoformat().replace('+00:00','Z'),
+            'expires_at':(now+dt.timedelta(minutes=4)).isoformat().replace('+00:00','Z'),
+            'nonce':req['nonce'],
+            'params':{},
+          }
+          Path('/tmp/a6-task.json').write_text(json.dumps(task,sort_keys=True,separators=(',',':')),encoding='utf-8')
+          Path('/tmp/a6-task-id').write_text(task['task_id'],encoding='utf-8')
+          print('A6_STATUS_TASK_BUILD=GREEN')
+          PY
+      - name: Mint OIDC and call server152 ingress
+        shell: bash
+        env:
+          A6_ENDPOINT: https://l67.ai/.well-known/a6-remote/v1/ingress
+          A6_AUDIENCE: malysh-a6-remote-ingress-v1
+        run: |
+          set -Eeuo pipefail
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          TOKEN_RESPONSE="$(curl --fail --silent --show-error -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${A6_AUDIENCE}")"
+          OIDC_TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$TOKEN_RESPONSE")"
+          echo "::add-mask::$OIDC_TOKEN"
+          export OIDC_TOKEN
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          body={'oidc_token':os.environ['OIDC_TOKEN'],'task':json.loads(Path('/tmp/a6-task.json').read_text())}
+          Path('/tmp/a6-request.json').write_text(json.dumps(body,sort_keys=True,separators=(',',':')),encoding='utf-8')
+          PY
+          curl --fail-with-body --silent --show-error --retry 1 --retry-all-errors --retry-delay 1 --connect-timeout 5 --max-time 35 \
+            -H 'Content-Type: application/json' --data-binary @/tmp/a6-request.json "$A6_ENDPOINT" > /tmp/a6-response.json
+          echo 'A6_STATUS_INGRESS_HTTP=GREEN'
+      - name: Verify signed server receipt and build public receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f relay/server152-receipt-public.pem
+          python3 - <<'PY'
+          import base64,hashlib,json
+          from pathlib import Path
+          response=json.loads(Path('/tmp/a6-response.json').read_text(encoding='utf-8'))
+          if set(response)!={'schema','state','receipt_sha256','receipt'}: raise SystemExit('response exact fields')
+          if response['schema']!='A6_REMOTE_OIDC_RESPONSE_V1' or response['state']!='GREEN': raise SystemExit('response state')
+          receipt=response['receipt']
+          raw=json.dumps(receipt,sort_keys=True,separators=(',',':')).encode()
+          if hashlib.sha256(raw).hexdigest()!=response['receipt_sha256']: raise SystemExit('receipt hash')
+          sig=receipt.get('signature')
+          if not isinstance(sig,dict) or set(sig)!={'algorithm','key_id','value_base64'} or sig['algorithm']!='Ed25519': raise SystemExit('signature metadata')
+          signature=base64.b64decode(sig['value_base64'],validate=True)
+          unsigned=dict(receipt); unsigned.pop('signature')
+          Path('/tmp/a6-receipt-unsigned.json').write_bytes(json.dumps(unsigned,sort_keys=True,separators=(',',':')).encode())
+          Path('/tmp/a6-receipt.sig').write_bytes(signature)
+          task=json.loads(Path('/tmp/a6-task.json').read_text())
+          if receipt.get('task_id')!=task['task_id'] or receipt.get('relay_sha')!=task['relay_sha'] or receipt.get('operation')!='A6_STATUS': raise SystemExit('receipt task binding')
+          boundary=receipt.get('boundary')
+          expected={'executor_network_egress':False,'production_write':False,'database_write':False,'source_material_write':False,'arbitrary_shell':False,'operation_allowlist':['A6_STATUS']}
+          if boundary!=expected: raise SystemExit('receipt boundary')
+          result=receipt.get('result') or {}
+          public={
+            'schema':'A6_REMOTE_PUBLIC_RECEIPT_V1',
+            'task_id':receipt['task_id'],
+            'operation':'A6_STATUS',
+            'relay_sha':receipt['relay_sha'],
+            'task_sha256':receipt['task_sha256'],
+            'executed_at':receipt['executed_at'],
+            'server_receipt_sha256':response['receipt_sha256'],
+            'server_signature_key_id':sig['key_id'],
+            'status':{
+              'uptime_seconds':result.get('uptime_seconds'),
+              'memory_kb':result.get('memory_kb'),
+              'root_filesystem_bytes':result.get('root_filesystem_bytes'),
+              'legacy_a6_pause_present':result.get('legacy_a6_pause_present'),
+              'oidc_pause_present':result.get('oidc_pause_present'),
+            },
+            'boundary':boundary,
+          }
+          Path('/tmp/a6-public-receipt.json').write_text(json.dumps(public,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
+          PY
+          openssl pkeyutl -verify -pubin -inkey relay/server152-receipt-public.pem -rawin -in /tmp/a6-receipt-unsigned.json -sigfile /tmp/a6-receipt.sig
+          echo 'A6_STATUS_RECEIPT_SIGNATURE=GREEN'
+      - name: Publish immutable-by-task-id public receipt
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          TASK_ID="$(cat /tmp/a6-task-id)"
+          DEST="receipts/${TASK_ID}.json"
+          mkdir -p receipts
+          if test -e "$DEST"; then
+            cmp -s "$DEST" /tmp/a6-public-receipt.json || { echo 'A6_PUBLIC_RECEIPT_CONFLICT=RED'; exit 77; }
+            echo 'A6_PUBLIC_RECEIPT=IDEMPOTENT'
+            exit 0
+          fi
+          cp /tmp/a6-public-receipt.json "$DEST"
+          git config user.name 'a6-remote-relay[bot]'
+          git config user.email 'a6-remote-relay[bot]@users.noreply.github.com'
+          git add "$DEST"
+          git commit -m "A6_RESULT ${TASK_ID}"
+          git push origin HEAD:main
+          echo 'A6_PUBLIC_RECEIPT=PUBLISHED'
