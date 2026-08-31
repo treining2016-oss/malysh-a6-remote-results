@@ -1,1 +1,1 @@
-{"schema":"A6_REMOTE_OIDC_REQUEST_V1","task_id":"status-g4final-20260831-0956z","operation":"A6_STATUS","nonce":"0e4fd7c41a7244f5a0d2e8b91c6a53fe","params":{}}
+{"schema":"A6_REMOTE_OIDC_REQUEST_V1","task_id":"diag-g5-live-20260831-1311z","operation":"A6_HOST_DIAGNOSTICS_STATUS","nonce":"a53e8c1d7b2940f6b9127e4c3a6508df","params":{}}
