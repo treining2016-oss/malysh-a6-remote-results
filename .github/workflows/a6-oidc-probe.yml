@@ -1,0 +1,48 @@
+name: A6 Remote OIDC Probe
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    if: github.actor == 'treining2016-oss' && startsWith(github.event.issue.title, 'A6_REMOTE_OIDC_PROBE')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Mint and validate GitHub OIDC claims
+        shell: bash
+        env:
+          EXPECT_REPO: treining2016-oss/malysh-a6-remote-results
+          EXPECT_ACTOR: treining2016-oss
+          EXPECT_AUD: malysh-a6-remote-ingress-v1
+        run: |
+          set -Eeuo pipefail
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+          RESPONSE="$(curl --fail --silent --show-error \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${EXPECT_AUD}")"
+          TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<<"$RESPONSE")"
+          echo "::add-mask::$TOKEN"
+          export TOKEN EXPECT_REPO EXPECT_ACTOR EXPECT_AUD
+          python3 - <<'PY'
+          import base64, json, os
+          token=os.environ['TOKEN']
+          parts=token.split('.')
+          assert len(parts)==3
+          payload=json.loads(base64.urlsafe_b64decode(parts[1]+'='*((4-len(parts[1])%4)%4)))
+          assert payload['iss']=='https://token.actions.githubusercontent.com'
+          assert payload['aud']==os.environ['EXPECT_AUD']
+          assert payload['repository']==os.environ['EXPECT_REPO']
+          assert payload['actor']==os.environ['EXPECT_ACTOR']
+          assert payload['event_name']=='issues'
+          assert payload['workflow_ref'].endswith('/.github/workflows/a6-oidc-probe.yml@refs/heads/main')
+          safe={k:payload.get(k) for k in ('iss','aud','repository','repository_id','actor','actor_id','event_name','workflow_ref','workflow_sha','ref','sha')}
+          print(json.dumps(safe,sort_keys=True,separators=(',',':')))
+          print('A6_REMOTE_OIDC_PROBE=GREEN')
+          PY
