@@ -25,6 +25,7 @@ jobs:
           EXPECT_RECEIPT_BLOB: 4d3beec81128505e8bd6a03934031cf8f6047712
         run: |
           set -Eeuo pipefail
+          echo 'MASTER75_A6_RESULT_IMMUTABILITY_PROBE=START'
           BEFORE="$(git ls-remote --heads origin "refs/heads/${TARGET}" | awk '{print $1}')"
           test "$BEFORE" = "$EXPECT_SHA"
           git fetch --no-tags --depth=1 origin "refs/heads/${TARGET}:refs/remotes/origin/immutability-target"
