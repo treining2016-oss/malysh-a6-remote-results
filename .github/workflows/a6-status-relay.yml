@@ -1,4 +1,4 @@
-name: A6 Status Relay V2
+name: A6 Status Relay V3
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: a6-status-relay-v2
+  group: a6-status-relay-v3
   cancel-in-progress: false
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - name: Build exact bounded A6_STATUS task
+      - name: Build exact bounded A6 task
         shell: bash
         env:
           RELAY_SHA: ${{ github.sha }}
@@ -36,7 +36,8 @@ jobs:
           if set(req)!={'schema','task_id','operation','nonce','params'}: raise SystemExit('request exact fields')
           if req['schema']!='A6_REMOTE_OIDC_REQUEST_V1': raise SystemExit('request schema')
           if not isinstance(req['task_id'],str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{5,63}',req['task_id']): raise SystemExit('task id')
-          if req['operation']!='A6_STATUS': raise SystemExit('operation')
+          allowed=('A6_STATUS','A6_HOST_DIAGNOSTICS_STATUS')
+          if req['operation'] not in allowed: raise SystemExit('operation')
           if not isinstance(req['nonce'],str) or not re.fullmatch(r'[0-9a-f]{32}',req['nonce']): raise SystemExit('nonce')
           if req['params']!={}: raise SystemExit('params')
           sha=os.environ['RELAY_SHA']
@@ -45,7 +46,7 @@ jobs:
           task={
             'schema':'A6_REMOTE_OIDC_TASK_V1',
             'task_id':req['task_id'],
-            'operation':'A6_STATUS',
+            'operation':req['operation'],
             'relay_sha':sha,
             'issued_at':now.isoformat().replace('+00:00','Z'),
             'expires_at':(now+dt.timedelta(minutes=4)).isoformat().replace('+00:00','Z'),
@@ -54,7 +55,8 @@ jobs:
           }
           Path('/tmp/a6-task.json').write_text(json.dumps(task,sort_keys=True,separators=(',',':')),encoding='utf-8')
           Path('/tmp/a6-task-id').write_text(task['task_id'],encoding='utf-8')
-          print('A6_STATUS_TASK_BUILD=GREEN')
+          Path('/tmp/a6-operation').write_text(task['operation'],encoding='utf-8')
+          print('A6_TASK_BUILD=GREEN operation='+task['operation'])
           PY
       - name: Mint OIDC and call server152 ingress
         shell: bash
@@ -77,7 +79,7 @@ jobs:
           PY
           curl --fail-with-body --silent --show-error --retry 1 --retry-all-errors --retry-delay 1 --connect-timeout 5 --max-time 35 \
             -H 'Content-Type: application/json' --data-binary @/tmp/a6-request.json "$A6_ENDPOINT" > /tmp/a6-response.json
-          echo 'A6_STATUS_INGRESS_HTTP=GREEN'
+          echo 'A6_INGRESS_HTTP=GREEN'
       - name: Verify signed server receipt and build public receipt
         shell: bash
         run: |
@@ -99,33 +101,39 @@ jobs:
           Path('/tmp/a6-receipt-unsigned.json').write_bytes(json.dumps(unsigned,sort_keys=True,separators=(',',':')).encode())
           Path('/tmp/a6-receipt.sig').write_bytes(signature)
           task=json.loads(Path('/tmp/a6-task.json').read_text())
-          if receipt.get('task_id')!=task['task_id'] or receipt.get('relay_sha')!=task['relay_sha'] or receipt.get('operation')!='A6_STATUS': raise SystemExit('receipt task binding')
+          operation=task['operation']
+          if receipt.get('task_id')!=task['task_id'] or receipt.get('relay_sha')!=task['relay_sha'] or receipt.get('operation')!=operation: raise SystemExit('receipt task binding')
           boundary=receipt.get('boundary')
-          expected={'executor_network_egress':False,'production_write':False,'database_write':False,'source_material_write':False,'arbitrary_shell':False,'operation_allowlist':['A6_STATUS']}
+          expected={'executor_network_egress':False,'production_write':False,'database_write':False,'source_material_write':False,'arbitrary_shell':False,'operation_allowlist':['A6_STATUS','A6_HOST_DIAGNOSTICS_STATUS']}
           if boundary!=expected: raise SystemExit('receipt boundary')
           result=receipt.get('result') or {}
           public={
             'schema':'A6_REMOTE_PUBLIC_RECEIPT_V1',
             'task_id':receipt['task_id'],
-            'operation':'A6_STATUS',
+            'operation':operation,
             'relay_sha':receipt['relay_sha'],
             'task_sha256':receipt['task_sha256'],
             'executed_at':receipt['executed_at'],
             'server_receipt_sha256':response['receipt_sha256'],
             'server_signature_key_id':sig['key_id'],
-            'status':{
-              'uptime_seconds':result.get('uptime_seconds'),
-              'memory_kb':result.get('memory_kb'),
-              'root_filesystem_bytes':result.get('root_filesystem_bytes'),
-              'legacy_a6_pause_present':result.get('legacy_a6_pause_present'),
-              'oidc_pause_present':result.get('oidc_pause_present'),
-            },
             'boundary':boundary,
           }
+          if operation=='A6_STATUS':
+            required={'uptime_seconds','memory_kb','root_filesystem_bytes','legacy_a6_pause_present','oidc_pause_present'}
+            if not required.issubset(result): raise SystemExit('status result shape')
+            public['status']={k:result.get(k) for k in sorted(required)}
+          elif operation=='A6_HOST_DIAGNOSTICS_STATUS':
+            required={'os_release','kernel','load_average','active_runtime_sha256','queue_counts','legacy_a6_pause_present','oidc_pause_present'}
+            if set(result)!=required: raise SystemExit('diagnostics result shape')
+            if not isinstance(result['load_average'],list) or len(result['load_average'])!=3: raise SystemExit('diagnostics load shape')
+            if not isinstance(result['queue_counts'],dict): raise SystemExit('diagnostics queue shape')
+            public['diagnostics']=result
+          else:
+            raise SystemExit('unexpected operation')
           Path('/tmp/a6-public-receipt.json').write_text(json.dumps(public,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')
           PY
           openssl pkeyutl -verify -pubin -inkey relay/server152-receipt-public.pem -rawin -in /tmp/a6-receipt-unsigned.json -sigfile /tmp/a6-receipt.sig
-          echo 'A6_STATUS_RECEIPT_SIGNATURE=GREEN'
+          echo 'A6_RECEIPT_SIGNATURE=GREEN'
       - name: Publish create-once result branch
         shell: bash
         run: |
