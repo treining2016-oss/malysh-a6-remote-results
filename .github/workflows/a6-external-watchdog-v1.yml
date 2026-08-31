@@ -1,0 +1,82 @@
+name: A6 External Watchdog V1
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/a6-external-watchdog-v1.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: a6-external-watchdog-v1
+  cancel-in-progress: false
+
+jobs:
+  external-liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      INCIDENT_TITLE: '[A6 WATCHDOG] server152 external liveness failure'
+    steps:
+      - name: Probe server152 from independent GitHub-hosted fault domain
+        id: probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root_ok=0
+          ingress_ok=0
+          root_code=000
+          ingress_code=000
+          for delay in 0 7 20; do
+            if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
+            root_code="$(curl -L -o /dev/null -sS --connect-timeout 5 --max-time 15 -w '%{http_code}' https://l67.ai/ || true)"
+            case "$root_code" in 200|301|302|303|307|308) root_ok=1 ;; esac
+            ingress_code="$(curl -o /dev/null -sS --connect-timeout 5 --max-time 15 -w '%{http_code}' \
+              -H 'Content-Type: application/json' --data-binary '{}' \
+              https://l67.ai/.well-known/a6-remote/v1/ingress || true)"
+            # A live fail-closed ingress rejects an unauthenticated malformed probe.
+            case "$ingress_code" in 400|401|403|413|415|423) ingress_ok=1 ;; esac
+            if [ "$root_ok" -eq 1 ] && [ "$ingress_ok" -eq 1 ]; then break; fi
+          done
+          printf 'root_http=%s\ningress_http=%s\nroot_ok=%s\ningress_ok=%s\n' "$root_code" "$ingress_code" "$root_ok" "$ingress_ok"
+          if [ "$root_ok" -eq 1 ] && [ "$ingress_ok" -eq 1 ]; then
+            echo 'state=GREEN' >> "$GITHUB_OUTPUT"
+          else
+            echo 'state=RED' >> "$GITHUB_OUTPUT"
+          fi
+          echo "root_http=$root_code" >> "$GITHUB_OUTPUT"
+          echo "ingress_http=$ingress_code" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update incident on confirmed external failure
+        if: steps.probe.outputs.state == 'RED'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          existing="$(gh issue list --repo "$GH_REPO" --state open --search "$INCIDENT_TITLE in:title" --json number,title --jq '.[] | select(.title==env.INCIDENT_TITLE) | .number' | head -n1)"
+          body="External GitHub-hosted watchdog confirmed server152 liveness failure after bounded retries. root_http=${{ steps.probe.outputs.root_http }}, ingress_http=${{ steps.probe.outputs.ingress_http }}. This monitor runs outside server152; no user data, secret values, or application message content is read."
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GH_REPO" --body "$body"
+          else
+            gh issue create --repo "$GH_REPO" --title "$INCIDENT_TITLE" --body "$body"
+          fi
+          exit 42
+
+      - name: Close watchdog incident after externally verified recovery
+        if: steps.probe.outputs.state == 'GREEN'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          existing="$(gh issue list --repo "$GH_REPO" --state open --search "$INCIDENT_TITLE in:title" --json number,title --jq '.[] | select(.title==env.INCIDENT_TITLE) | .number' | head -n1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GH_REPO" --body 'External watchdog now observes root and fail-closed A6 ingress as GREEN. Closing incident automatically.'
+            gh issue close "$existing" --repo "$GH_REPO" --reason completed
+          fi
+          echo 'A6_EXTERNAL_WATCHDOG=GREEN'
