@@ -1,0 +1,154 @@
+name: Distributed Presence Clean-Room Synthetic V1
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/distributed-presence-clean-room-synthetic-v1.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-clean-room-restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert external zero-cost clean-room boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo 'classification=SYNTHETIC_ONLY'
+          echo 'server152_required=false'
+          echo 'production_data=false'
+          echo 'source_private_data=false'
+          echo 'owner_recovery_share_present=false'
+          echo 'paid_fallback=false'
+
+      - name: Check required crypto runtime
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import cryptography
+          print('cryptography_version=' + cryptography.__version__)
+          PY
+
+      - name: Execute synthetic 3-of-5 clean-room restore
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import x25519
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+          PRIME = 257
+          THRESHOLD = 3
+          SHARE_COUNT = 5
+
+          def inv(a):
+              return pow(a % PRIME, PRIME - 2, PRIME)
+
+          def split_secret(secret):
+              shares = [[x] for x in range(1, SHARE_COUNT + 1)]
+              for b in secret:
+                  a1 = int.from_bytes(os.urandom(2), 'big') % PRIME
+                  a2 = int.from_bytes(os.urandom(2), 'big') % PRIME
+                  for x in range(1, SHARE_COUNT + 1):
+                      y = (b + a1 * x + a2 * x * x) % PRIME
+                      shares[x - 1].append(y)
+              return shares
+
+          def reconstruct(selected):
+              out = bytearray()
+              xs = [s[0] for s in selected]
+              width = len(selected[0]) - 1
+              for idx in range(1, width + 1):
+                  acc = 0
+                  for i, xi in enumerate(xs):
+                      yi = selected[i][idx]
+                      num = 1
+                      den = 1
+                      for j, xj in enumerate(xs):
+                          if i == j:
+                              continue
+                          num = (num * (-xj)) % PRIME
+                          den = (den * (xi - xj)) % PRIME
+                      acc = (acc + yi * num * inv(den)) % PRIME
+                  if not 0 <= acc <= 255:
+                      raise SystemExit('reconstructed byte out of range')
+                  out.append(acc)
+              return bytes(out)
+
+          payload = json.dumps({
+              'schema': 'MALYSH_SYNTHETIC_CLEAN_ROOM_PAYLOAD_V1',
+              'classification': 'SYNTHETIC',
+              'purpose': 'clean_room_restore_acceptance',
+              'production_data': False,
+              'source_private_data': False,
+          }, sort_keys=True, separators=(',', ':')).encode()
+
+          recipient_private = x25519.X25519PrivateKey.generate()
+          recipient_private_raw = recipient_private.private_bytes(
+              serialization.Encoding.Raw,
+              serialization.PrivateFormat.Raw,
+              serialization.NoEncryption(),
+          )
+          recipient_public = recipient_private.public_key()
+
+          ephemeral_private = x25519.X25519PrivateKey.generate()
+          ephemeral_public_raw = ephemeral_private.public_key().public_bytes(
+              serialization.Encoding.Raw,
+              serialization.PublicFormat.Raw,
+          )
+          shared = ephemeral_private.exchange(recipient_public)
+          salt = os.urandom(32)
+          key = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt, info=b'malysh-synthetic-clean-room-v1').derive(shared)
+          nonce = os.urandom(12)
+          aad = b'MALYSH_SYNTHETIC_CLEAN_ROOM_V1'
+          ciphertext = AESGCM(key).encrypt(nonce, payload, aad)
+
+          shares = split_secret(recipient_private_raw)
+          del recipient_private_raw
+          del recipient_private
+          del ephemeral_private
+          del shared
+          del key
+
+          recovered_raw = reconstruct([shares[0], shares[2], shares[4]])
+          recovered_private = x25519.X25519PrivateKey.from_private_bytes(recovered_raw)
+          ephemeral_public = x25519.X25519PublicKey.from_public_bytes(ephemeral_public_raw)
+          recovered_shared = recovered_private.exchange(ephemeral_public)
+          recovered_key = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt, info=b'malysh-synthetic-clean-room-v1').derive(recovered_shared)
+          restored = AESGCM(recovered_key).decrypt(nonce, ciphertext, aad)
+
+          if restored != payload:
+              raise SystemExit('restore mismatch')
+
+          receipt = {
+              'schema': 'MALYSH_SYNTHETIC_CLEAN_ROOM_RECEIPT_V1',
+              'classification': 'PUBLIC_METADATA_ONLY',
+              'status': 'GREEN',
+              'threshold': THRESHOLD,
+              'share_count': SHARE_COUNT,
+              'shares_used': [1, 3, 5],
+              'algorithm': 'X25519-HKDF-SHA256-AES-256-GCM',
+              'payload_sha256': hashlib.sha256(payload).hexdigest(),
+              'ciphertext_sha256': hashlib.sha256(ciphertext).hexdigest(),
+              'server152_required': False,
+              'owner_recovery_share_present': False,
+              'private_material_persisted': False,
+              'production_data': False,
+              'source_private_data': False,
+              'paid_fallback': False,
+          }
+          print(json.dumps(receipt, sort_keys=True))
+          print('DISTRIBUTED_PRESENCE_D7_SYNTHETIC_CLEAN_ROOM=GREEN')
+          PY
