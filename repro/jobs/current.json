@@ -1,7 +1,7 @@
 {
   "schema": "MALYSH_ZERO_CASH_REPRO_JOB_V1",
   "work_id": "master-line",
-  "job_id": "zero-cash-public-repro-20261007T0455Z",
+  "job_id": "master156-github-hosted-e2e-20261007T1758Z",
   "task": "numerical-selftest",
   "cash_spend_usd_max": 0
 }
