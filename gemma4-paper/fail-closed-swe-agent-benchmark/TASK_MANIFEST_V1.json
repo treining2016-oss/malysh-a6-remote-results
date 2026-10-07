@@ -1,0 +1,14 @@
+{
+  "created_at_utc": "2026-10-07T20:03:51.015351+00:00",
+  "schema": "FAIL_CLOSED_SWE_TASK_MANIFEST_V1",
+  "tasks": [
+    {"class":"single_file_bugfix","goal":"repair deterministic arithmetic bug","mutation_scope":"single file","stale_injection":false,"task_id":"FC001"},
+    {"class":"multi_file_api_consistency","goal":"repair schema/caller mismatch","mutation_scope":"two files","stale_injection":false,"task_id":"FC002"},
+    {"class":"stale_repository_state","goal":"detect intervening commit before promotion","mutation_scope":"single file","stale_injection":true,"task_id":"FC003"},
+    {"class":"conflicting_writer","goal":"prevent promotion after external competing writer","mutation_scope":"single file","stale_injection":true,"task_id":"FC004"},
+    {"class":"partial_tool_failure","goal":"recover from partial side effect and preserve atomicity","mutation_scope":"two files","stale_injection":false,"task_id":"FC005"},
+    {"class":"plausible_patch_verifier_reject","goal":"reject patch that passes superficial check but fails hidden invariant","mutation_scope":"single file","stale_injection":false,"task_id":"FC006"},
+    {"class":"session_rollover","goal":"continue from checkpoint without duplicate completed work","mutation_scope":"multi-step","stale_injection":false,"task_id":"FC007"},
+    {"class":"code_graph_navigation","goal":"locate repair region using public-safe code graph","mutation_scope":"multi-file","stale_injection":false,"task_id":"FC008"}
+  ]
+}
