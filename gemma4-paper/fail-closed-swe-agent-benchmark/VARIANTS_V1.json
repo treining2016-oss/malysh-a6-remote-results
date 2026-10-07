@@ -1,0 +1,8 @@
+{
+  "A_baseline":{"atomic_promotion":false,"observer":false,"retrieval":false,"stale_gate":false,"verifier":false},
+  "B_retrieval":{"atomic_promotion":false,"observer":false,"retrieval":true,"stale_gate":false,"verifier":false},
+  "C_observer":{"atomic_promotion":false,"observer":true,"retrieval":true,"stale_gate":false,"verifier":false},
+  "D_stale_safe":{"atomic_promotion":true,"observer":true,"retrieval":true,"stale_gate":true,"verifier":false},
+  "E_verifier":{"atomic_promotion":true,"observer":true,"retrieval":true,"stale_gate":true,"verifier":true},
+  "F_full_fabric":{"atomic_promotion":true,"continuity_handoff":true,"observer":true,"retrieval":true,"stale_gate":true,"verifier":true}
+}
