@@ -1,0 +1,22 @@
+{
+  "promotion_rule": "GREEN only if stale_guard_verdict=GREEN AND verifier_verdict=GREEN AND test_verdict=GREEN",
+  "required": [
+    "task_id",
+    "variant",
+    "seed",
+    "repo_commit_before",
+    "repo_commit_after",
+    "proposed_patch_sha256",
+    "test_verdict",
+    "stale_guard_verdict",
+    "verifier_verdict",
+    "promotion_verdict",
+    "invalid_writes",
+    "duplicate_work",
+    "rollbacks",
+    "tool_calls",
+    "wall_seconds"
+  ],
+  "schema": "FAIL_CLOSED_SWE_RECEIPT_SCHEMA_V1",
+  "verdict_values": ["GREEN", "RED", "SKIP", "STALE"]
+}
