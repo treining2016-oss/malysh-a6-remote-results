@@ -6,9 +6,14 @@ if [[ ! "$CODE" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$ ]]; then
   echo MALYSH_SENTINEL_BAD_CODE >&2
   exit 2
 fi
-LOG="$HOME/malysh-sentinel-bootstrap.log"
-exec > >(tee -a "$LOG") 2>&1
-phase(){ printf 'MALYSH_SENTINEL_PHASE=%s\n' "$1"; }
+STATUS_DIR="/storage/emulated/0/Android/data/com.termux/files"
+STATUS="$STATUS_DIR/malysh-sentinel-status.log"
+AGENT_LOG="$STATUS_DIR/malysh-sentinel-agent.log"
+mkdir -p "$STATUS_DIR"
+: > "$STATUS"
+phase(){ printf 'MALYSH_SENTINEL_PHASE=%s\n' "$1" | tee -a "$STATUS"; }
+fail(){ rc=$?; printf 'MALYSH_SENTINEL_FAIL line=%s rc=%s\n' "$LINENO" "$rc" | tee -a "$STATUS"; exit "$rc"; }
+trap fail ERR
 phase START
 command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock || true
 pkg update -y
@@ -20,25 +25,22 @@ fi
 phase DEBIAN_READY
 proot-distro login debian -- bash -lc 'export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y python3 python3-venv python3-pip git curl ca-certificates'
 phase DEBIAN_DEPS_READY
-proot-distro login debian -- env SENTINELX_ENROLL_CODE="$CODE" bash -lc 'curl -fsSL https://get.sentinelx.app | SENTINELX_ENROLL_CODE="$SENTINELX_ENROLL_CODE" bash'
-phase SENTINEL_INSTALLED
-S="$PREFIX/var/service/sentinelx"
-mkdir -p "$S/log" "$S/control"
-cat > "$S/run" <<'EOF'
-#!/data/data/com.termux/files/usr/bin/sh
-exec proot-distro login debian -- runuser -u sentinelx -- /opt/sentinelx-cloud-core/.venv/bin/sentinelx-cloud-core --hub https://mcp.sentinelx.app --identity /etc/sentinelx/identity.json --config /etc/sentinelx/config.yaml 2>&1
-EOF
-cat > "$S/control/t" <<'EOF'
-#!/data/data/com.termux/files/usr/bin/sh
-pkill -TERM -f "sentinelx_core --identity|sentinelx-cloud-core --hub" 2>/dev/null || true
-EOF
-chmod 700 "$S/run" "$S/control/t"
-ln -sf "$PREFIX/share/termux-services/svlogger" "$S/log/run"
-if ! pgrep -f "runsvdir.*$PREFIX/var/service" >/dev/null 2>&1; then
-  nohup runsvdir -P "$PREFIX/var/service" >"$HOME/.malysh-runsvdir.log" 2>&1 &
-  sleep 2
+if proot-distro login debian -- test -s /etc/sentinelx/identity.json; then
+  phase IDENTITY_PRESENT
+else
+  proot-distro login debian -- env SENTINELX_ENROLL_CODE="$CODE" bash -lc 'curl -fsSL https://get.sentinelx.app | SENTINELX_ENROLL_CODE="$SENTINELX_ENROLL_CODE" bash'
+  phase ENROLLMENT_COMPLETE
 fi
-sv up sentinelx || true
-sleep 5
-sv status sentinelx || true
+: > "$AGENT_LOG"
+nohup proot-distro login debian -- runuser -u sentinelx -- /opt/sentinelx-cloud-core/.venv/bin/sentinelx-cloud-core --hub https://mcp.sentinelx.app --identity /etc/sentinelx/identity.json --config /etc/sentinelx/config.yaml >"$AGENT_LOG" 2>&1 &
+AGENT_PID=$!
+printf 'MALYSH_SENTINEL_AGENT_PID=%s\n' "$AGENT_PID" | tee -a "$STATUS"
+sleep 8
+if kill -0 "$AGENT_PID" 2>/dev/null; then
+  phase AGENT_RUNNING
+else
+  phase AGENT_EXITED
+  tail -80 "$AGENT_LOG" | tee -a "$STATUS"
+  exit 3
+fi
 phase COMPLETE
